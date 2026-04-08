@@ -1,0 +1,46 @@
+--- Python (O que realmente importa para o Render) ---
+
+Ignora o ambiente virtual local
+
+venv/
+Include/
+Lib/
+Scripts/
+pyvenv.cfg
+
+Ignora arquivos de cache e compilação do Python
+
+**/pycache/
+*.py[cod]
+*$py.class
+*.so
+
+--- ESP32 / PlatformIO (Bloqueio Total) ---
+
+Ignora TUDO do projeto de hardware para não misturar com o servidor
+
+.pio/
+.piopm/
+.piolibdeps/
+src/
+lib/
+include/
+test/
+platformio.ini
+
+--- Documentação e Notas ---
+
+Ignora arquivos de planejamento que não precisam estar no servidor
+
+NotesToRoo.md
+adr_caixa_fermentacao.md
+plano_software_fermentacao.md
+infra_futura.md
+
+--- Sistema e IDE ---
+
+.vscode/
+.history/
+.DS_Store
+Thumbs.db
+*.log
