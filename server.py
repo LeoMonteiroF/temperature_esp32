@@ -53,13 +53,13 @@ async def rota_temperatura(data: TemperatureData):
 
 @app.post('/temperatura_dht')
 async def rota_temperatura_dht(data: TemperatureData):
-    msg = f"[{data.horario}] Temperatura DHT22: {data.temperatura}°C"
+    msg = f"[{data.horario}] [ESP32] Temperatura DHT22: {data.temperatura}°C"
     registrar_log(msg)
     return {"status": "recebido"}
 
 @app.post('/umidade_dht')
 async def rota_umidade_dht(data: HumidityData):
-    msg = f"[{data.horario}] Umidade DHT22: {data.umidade}%"
+    msg = f"[{data.horario}] [ESP32] Umidade DHT22: {data.umidade}%"
     registrar_log(msg)
     return {"status": "recebido"}
 
