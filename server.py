@@ -19,6 +19,11 @@ logs_armazenados: List[str] = []
 
 class TemperatureData(BaseModel):
     temperatura: float
+    horario: str
+
+class HumidityData(BaseModel):
+    umidade: float
+    horario: str
 
 class BootData(BaseModel):
     status: str
@@ -42,8 +47,19 @@ async def rota_boot(data: BootData):
 
 @app.post('/temperatura')
 async def rota_temperatura(data: TemperatureData):
-    agora = datetime.datetime.now().strftime("[%d/%m %H:%M:%S]")
-    msg = f"{agora} Temperatura: {data.temperatura}°C"
+    msg = f"[{data.horario}] Temperatura: {data.temperatura}°C"
+    registrar_log(msg)
+    return {"status": "recebido"}
+
+@app.post('/temperatura_dht')
+async def rota_temperatura_dht(data: TemperatureData):
+    msg = f"[{data.horario}] Temperatura DHT22: {data.temperatura}°C"
+    registrar_log(msg)
+    return {"status": "recebido"}
+
+@app.post('/umidade_dht')
+async def rota_umidade_dht(data: HumidityData):
+    msg = f"[{data.horario}] Umidade DHT22: {data.umidade}%"
     registrar_log(msg)
     return {"status": "recebido"}
 
