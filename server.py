@@ -83,66 +83,65 @@ async def rota_log(data: LogData):
 @app.post('/alexa')
 async def rota_alexa(request: Request):
     req_data = await request.json()
-    
-    # Extrai qual é o tipo de requisição da Alexa
     req_type = req_data.get("request", {}).get("type")
-    
-    # Pega a intenção (se for um IntentRequest)
     intent_name = req_data.get("request", {}).get("intent", {}).get("name")
     
-    # Pega os atributos da sessão (para lembrar que ela fez uma pergunta)
+    # IMPORTANTE: Garante que pegamos os atributos da sessão corretamente
     session_attrs = req_data.get("session", {}).get("attributes", {})
+    if session_attrs is None:
+        session_attrs = {}
 
-    # 1. A pessoa perguntou a temperatura
-    if intent_name == "PerguntaTemperaturaIntent":
-        temp = ultima_leitura["temperatura"]
-        
-        if temp is None:
-            fala = "Ainda não recebi dados do sensor desde a última reinicialização."
-            encerra_sessao = True
-            atributos = {}
-        else:
-            fala = f"A medição atual é de {temp} graus. Gostaria de saber a última atualização?"
-            encerra_sessao = False # Mantém o microfone azul aceso
-            atributos = {"esperando_horario": True} # Avisa a si mesmo na próxima rodada
-
-        return {
-            "version": "1.0",
-            "sessionAttributes": atributos,
-            "response": {
-                "outputSpeech": {"type": "PlainText", "text": fala},
-                "shouldEndSession": encerra_sessao
-            }
-        }
-
-    # 2. A pessoa respondeu "Sim" para a pergunta do horário
-    elif intent_name == "AMAZON.YesIntent" and session_attrs.get("esperando_horario"):
-        horario = ultima_leitura["horario"]
+    # 1. TRATAR O "SIM" (Dando prioridade ao contexto)
+    if intent_name == "AMAZON.YesIntent" and session_attrs.get("esperando_horario"):
+        horario = ultima_leitura.get("horario", "não disponível")
         fala = f"O último log foi recebido às {horario}."
         
         return {
             "version": "1.0",
             "response": {
                 "outputSpeech": {"type": "PlainText", "text": fala},
-                "shouldEndSession": True # Agora fecha o microfone
-            }
-        }
-
-    # 3. A pessoa respondeu "Não"
-    elif intent_name == "AMAZON.NoIntent" and session_attrs.get("esperando_horario"):
-        return {
-            "version": "1.0",
-            "response": {
-                "outputSpeech": {"type": "PlainText", "text": "Tudo bem, estarei aqui se precisar."},
                 "shouldEndSession": True
             }
         }
 
-    # Resposta de fallback padrão
+    # 2. TRATAR O "NÃO"
+    elif intent_name == "AMAZON.NoIntent":
+        return {
+            "version": "1.0",
+            "response": {
+                "outputSpeech": {"type": "PlainText", "text": "Ok, estarei monitorando. Até mais!"},
+                "shouldEndSession": True
+            }
+        }
+
+    # 3. PERGUNTA DE TEMPERATURA OU ABERTURA
+    elif req_type == "LaunchRequest" or intent_name == "PerguntaTemperaturaIntent":
+        temp = ultima_leitura.get("temperatura")
+        
+        if temp is None:
+            fala = "Ainda não recebi dados do sensor."
+            encerra = True
+            attrs = {}
+        else:
+            fala = f"A medição atual é de {temp} graus. Gostaria de saber a última atualização?"
+            encerra = False
+            # O "bilhete" que a Alexa deve devolver no próximo turno
+            attrs = {"esperando_horario": True}
+
+        return {
+            "version": "1.0",
+            "sessionAttributes": attrs,
+            "response": {
+                "outputSpeech": {"type": "PlainText", "text": fala},
+                "shouldEndSession": encerra
+            }
+        }
+
+    # Fallback para qualquer outra coisa
     return {
         "version": "1.0",
         "response": {
-            "outputSpeech": {"type": "PlainText", "text": "Desculpe, não entendi."},
+            "outputSpeech": {"type": "PlainText", "text": "Não entendi o pedido."},
             "shouldEndSession": True
         }
     }
