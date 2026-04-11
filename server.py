@@ -1,7 +1,7 @@
 import os
 import datetime
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import List
@@ -16,6 +16,12 @@ LIMITE_HISTORICO = int(os.getenv("LIMITE_HISTORICO", "100"))
 
 # Memória temporária para logs (não persiste se o servidor reiniciar)
 logs_armazenados: List[str] = []
+
+# Memória focada na Alexa (guarda sempre a última leitura limpa)
+ultima_leitura = {
+    "temperatura": None,
+    "horario": None
+}
 
 class TemperatureData(BaseModel):
     temperatura: float
@@ -47,6 +53,10 @@ async def rota_boot(data: BootData):
 
 @app.post('/temperatura')
 async def rota_temperatura(data: TemperatureData):
+    # Atualiza o cofre da Alexa
+    ultima_leitura["temperatura"] = data.temperatura
+    ultima_leitura["horario"] = data.horario
+    
     msg = f"[{data.horario}] Temperatura: {data.temperatura}°C"
     registrar_log(msg)
     return {"status": "recebido"}
@@ -69,6 +79,73 @@ async def rota_log(data: LogData):
     msg = f"[{agora}] [ESP32] {data.log}"
     registrar_log(msg)
     return {"status": "log_registrado"}
+
+@app.post('/alexa')
+async def rota_alexa(request: Request):
+    req_data = await request.json()
+    
+    # Extrai qual é o tipo de requisição da Alexa
+    req_type = req_data.get("request", {}).get("type")
+    
+    # Pega a intenção (se for um IntentRequest)
+    intent_name = req_data.get("request", {}).get("intent", {}).get("name")
+    
+    # Pega os atributos da sessão (para lembrar que ela fez uma pergunta)
+    session_attrs = req_data.get("session", {}).get("attributes", {})
+
+    # 1. A pessoa perguntou a temperatura
+    if intent_name == "PerguntaTemperaturaIntent":
+        temp = ultima_leitura["temperatura"]
+        
+        if temp is None:
+            fala = "Ainda não recebi dados do sensor desde a última reinicialização."
+            encerra_sessao = True
+            atributos = {}
+        else:
+            fala = f"A medição atual é de {temp} graus. Gostaria de saber a última atualização?"
+            encerra_sessao = False # Mantém o microfone azul aceso
+            atributos = {"esperando_horario": True} # Avisa a si mesmo na próxima rodada
+
+        return {
+            "version": "1.0",
+            "sessionAttributes": atributos,
+            "response": {
+                "outputSpeech": {"type": "PlainText", "text": fala},
+                "shouldEndSession": encerra_sessao
+            }
+        }
+
+    # 2. A pessoa respondeu "Sim" para a pergunta do horário
+    elif intent_name == "AMAZON.YesIntent" and session_attrs.get("esperando_horario"):
+        horario = ultima_leitura["horario"]
+        fala = f"O último log foi recebido às {horario}."
+        
+        return {
+            "version": "1.0",
+            "response": {
+                "outputSpeech": {"type": "PlainText", "text": fala},
+                "shouldEndSession": True # Agora fecha o microfone
+            }
+        }
+
+    # 3. A pessoa respondeu "Não"
+    elif intent_name == "AMAZON.NoIntent" and session_attrs.get("esperando_horario"):
+        return {
+            "version": "1.0",
+            "response": {
+                "outputSpeech": {"type": "PlainText", "text": "Tudo bem, estarei aqui se precisar."},
+                "shouldEndSession": True
+            }
+        }
+
+    # Resposta de fallback padrão
+    return {
+        "version": "1.0",
+        "response": {
+            "outputSpeech": {"type": "PlainText", "text": "Desculpe, não entendi."},
+            "shouldEndSession": True
+        }
+    }
 
 @app.get('/', response_class=HTMLResponse)
 async def pagina_principal():
