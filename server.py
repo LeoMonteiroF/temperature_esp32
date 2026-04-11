@@ -1,14 +1,8 @@
 import os
 import datetime
 import uvicorn
-import locale
+import pytz
 from fastapi import FastAPI, Request
-
-# Tenta definir para português para pegar nomes de meses, se falhar mantém o padrão
-try:
-    locale.setlocale(locale.LC_TIME, "pt_BR.utf8")
-except:
-    pass
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import List
@@ -59,18 +53,37 @@ async def rota_boot(data: BootData):
     registrar_log(msg)
     return {"status": "ok"}
 
+def obter_horario_brasil_extenso():
+    # Define o fuso horário de Brasília/São Paulo
+    fuso_br = pytz.timezone('America/Sao_Paulo')
+    agora = datetime.datetime.now(fuso_br)
+    
+    # Dicionário para traduzir o mês na mão (mais seguro que locale)
+    meses = {
+        1: "janeiro", 2: "fevereiro", 3: "março", 4: "abril",
+        5: "maio", 6: "junho", 7: "julho", 8: "agosto",
+        9: "setembro", 10: "outubro", 11: "novembro", 12: "dezembro"
+    }
+    
+    dia = agora.day
+    mes = meses[agora.month]
+    hora = agora.hour
+    minuto = agora.minute
+    
+    # Formata a string exatamente como a Alexa deve falar
+    return f"{dia} de {mes} às {hora} horas e {minuto} minutos"
+
 @app.post('/temperatura')
 async def rota_temperatura(data: TemperatureData):
-    agora = datetime.datetime.now()
-    
-    # Atualiza o cofre da Alexa
+    # Atualiza o cofre da Alexa com o horário corrigido
     ultima_leitura["temperatura"] = data.temperatura
-    # Formato: "10 de abril às 17 horas e 4 minutos"
-    ultima_leitura["horario_fala"] = agora.strftime("%d de %B às %H horas e %M minutos")
-    # Mantém o formato curto para o log visual da página
-    ultima_leitura["horario"] = data.horario
+    ultima_leitura["horario_fala"] = obter_horario_brasil_extenso()
     
-    msg = f"[{data.horario}] Temperatura: {data.temperatura}°C"
+    # Para o log visual, usamos apenas o relógio
+    fuso_br = pytz.timezone('America/Sao_Paulo')
+    ultima_leitura["horario"] = datetime.datetime.now(fuso_br).strftime("%H:%M:%S")
+    
+    msg = f"[{ultima_leitura['horario']}] Temperatura: {data.temperatura}°C"
     registrar_log(msg)
     return {"status": "recebido"}
 
