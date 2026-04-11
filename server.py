@@ -1,7 +1,14 @@
 import os
 import datetime
 import uvicorn
+import locale
 from fastapi import FastAPI, Request
+
+# Tenta definir para português para pegar nomes de meses, se falhar mantém o padrão
+try:
+    locale.setlocale(locale.LC_TIME, "pt_BR.utf8")
+except:
+    pass
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import List
@@ -20,7 +27,8 @@ logs_armazenados: List[str] = []
 # Memória focada na Alexa (guarda sempre a última leitura limpa)
 ultima_leitura = {
     "temperatura": None,
-    "horario": None
+    "horario": None,
+    "horario_fala": None
 }
 
 class TemperatureData(BaseModel):
@@ -53,8 +61,13 @@ async def rota_boot(data: BootData):
 
 @app.post('/temperatura')
 async def rota_temperatura(data: TemperatureData):
+    agora = datetime.datetime.now()
+    
     # Atualiza o cofre da Alexa
     ultima_leitura["temperatura"] = data.temperatura
+    # Formato: "10 de abril às 17 horas e 4 minutos"
+    ultima_leitura["horario_fala"] = agora.strftime("%d de %B às %H horas e %M minutos")
+    # Mantém o formato curto para o log visual da página
     ultima_leitura["horario"] = data.horario
     
     msg = f"[{data.horario}] Temperatura: {data.temperatura}°C"
@@ -93,8 +106,8 @@ async def rota_alexa(request: Request):
 
     # 1. TRATAR O "SIM" (Dando prioridade ao contexto)
     if intent_name == "AMAZON.YesIntent" and session_attrs.get("esperando_horario"):
-        horario = ultima_leitura.get("horario", "não disponível")
-        fala = f"O último log foi recebido às {horario}."
+        horario_extenso = ultima_leitura.get("horario_fala", "momento desconhecido")
+        fala = f"O último registro foi feito no dia {horario_extenso}."
         
         return {
             "version": "1.0",
