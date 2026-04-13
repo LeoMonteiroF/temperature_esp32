@@ -14,7 +14,10 @@ app = FastAPI()
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_db_connection():
-    return psycopg2.connect(DATABASE_URL)
+    # Se DATABASE_URL for uma string de conexão completa, psycopg2.connect(DATABASE_URL) deveria funcionar.
+    # O erro "invalid port number" sugere que o psycopg2 está interpretando parte da string como porta.
+    # Vamos tentar usar o parâmetro dsn explicitamente.
+    return psycopg2.connect(dsn=DATABASE_URL)
 
 def init_db():
     conn = get_db_connection()
