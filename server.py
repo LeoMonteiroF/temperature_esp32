@@ -428,7 +428,7 @@ async def api_dados(periodo: int = 1, resolucao: Optional[int] = None):
     cursor = conn.cursor()
     
     # Filtro de tempo
-    data_limite = (datetime.datetime.now() - datetime.timedelta(days=periodo)).strftime('%Y-%m-%d %H:%M:%S')
+    data_limite = (datetime.datetime.now() - datetime.timedelta(days=periodo))
     
     # Busca dados
     cursor.execute('''
@@ -462,7 +462,8 @@ async def api_dados(periodo: int = 1, resolucao: Optional[int] = None):
         sensor = row[3]
         
         # Formata timestamp para o gráfico (HH:mm se for 1 dia, DD/MM HH:mm se for mais)
-        dt = datetime.datetime.strptime(ts, '%Y-%m-%d %H:%M:%S')
+        # ts já vem como objeto datetime do psycopg2
+        dt = ts
         label = dt.strftime('%H:%M') if periodo <= 1 else dt.strftime('%d/%m %H:%M')
         
         labels.append(label)
