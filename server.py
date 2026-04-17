@@ -1,9 +1,10 @@
 import os
 import datetime
 import uvicorn
+import asyncio
 import pytz
 import psycopg2
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import List, Optional
@@ -12,6 +13,19 @@ app = FastAPI()
 
 # --- BANCO DE DADOS (Supabase/PostgreSQL) ---
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+# --- ESTADO DA TOMADA (Proxy Local) ---
+tomadaStatus: str = "off"
+ultimaLeituraTimestamp: Optional[datetime.datetime] = None
+timestampMudancaEstado: Optional[datetime.datetime] = None
+LIMITE_INERCIA_TERMICA = 300  # 5 minutos para detectar dessincronização
+TEMPO_PULSO_RESYNC = 30       # 30 segundos de pulso para forçar o Google Home
+
+# --- CONFIGURAÇÕES DE AQUECIMENTO ---
+em_pulso_resync: bool = False
+TEMP_CORTE = 9.0              # Desliga o aquecedor ao atingir 9.0°C
+HISTERESE = 0.5               # Religa se cair abaixo de 8.5°C (9.0 - 0.5)
+TEMP_MAX_OVERSHOOT = 11.0     # Teto de segurança pós-corte
 
 def get_db_connection():
     # Se DATABASE_URL for uma string de conexão completa, psycopg2.connect(DATABASE_URL) deveria funcionar.
@@ -101,6 +115,22 @@ def registrar_log(mensagem: str):
     if len(logs_armazenados) > LIMITE_HISTORICO:
         logs_armazenados.pop(0)
 
+async def trigger_resync_pulse():
+    global tomadaStatus, em_pulso_resync
+    if em_pulso_resync:
+        return # Impede disparos simultâneos
+    
+    em_pulso_resync = True
+    registrar_log(">>> [RESYNC] Detectada dessincronização física. Iniciando Pulso de Ressincronização...")
+    tomadaStatus = "on"
+    registrar_log(">>> [RESYNC] Estado forçado para 'on' para rearmar gatilho do Google Home.")
+    
+    await asyncio.sleep(TEMPO_PULSO_RESYNC)
+    
+    tomadaStatus = "off"
+    registrar_log(">>> [RESYNC] Pulso finalizado. Estado retornado para 'off'.")
+    em_pulso_resync = False
+
 @app.post('/boot')
 async def rota_boot(data: BootData):
     msg = f"[{data.horario}] >>> SISTEMA REINICIADO: {data.status.upper()}"
@@ -128,29 +158,67 @@ def obter_horario_brasil_extenso():
     return f"{dia} de {mes} às {hora} horas e {minuto} minutos"
 
 @app.post('/temperatura')
-async def rota_temperatura(data: TemperatureData):
+def rota_temperatura(data: TemperatureData, background_tasks: BackgroundTasks):
+    global ultimaLeituraTimestamp, tomadaStatus, timestampMudancaEstado
+    agora = datetime.datetime.now()
+    ultimaLeituraTimestamp = agora
+    
+    temp_anterior = ultima_leitura["temperatura"]
+    
+    # Apenas atua se não estivermos no meio de um pulso de correção
+    if not em_pulso_resync:
+        # Lógica de Aquecimento
+        if data.temperatura <= (TEMP_CORTE - HISTERESE):
+            novo_status = "on"
+        elif data.temperatura >= TEMP_CORTE:
+            novo_status = "off"
+        else:
+            novo_status = tomadaStatus # Mantém estado atual dentro da histerese
+            
+        if novo_status != tomadaStatus:
+            tomadaStatus = novo_status
+            timestampMudancaEstado = agora
+            
+        # --- DETECÇÃO DE DESSINCRONIZAÇÃO (Aquecedor colado ON) ---
+        if tomadaStatus == "off":
+            # Passou do limite de overshoot natural
+            passou_do_teto = data.temperatura >= TEMP_MAX_OVERSHOOT
+            # Ou passou o tempo de inércia e temperatura AINDA ESTÁ SUBINDO
+            inercia_vencida_e_subindo = timestampMudancaEstado and (agora - timestampMudancaEstado).total_seconds() > LIMITE_INERCIA_TERMICA and temp_anterior is not None and data.temperatura > temp_anterior
+            
+            if passou_do_teto or inercia_vencida_e_subindo:
+                registrar_log(f"!!! [ALERTA] Aquecedor colado ON? (Temp: {data.temperatura}°C). Iniciando Resync.")
+                background_tasks.add_task(trigger_resync_pulse)
+    
     # Atualiza o cofre da Alexa com o horário corrigido
     ultima_leitura["temperatura"] = data.temperatura
     ultima_leitura["horario_fala"] = obter_horario_brasil_extenso()
     
     # Para o log visual, usamos apenas o relógio
     fuso_br = pytz.timezone('America/Sao_Paulo')
-    ultima_leitura["horario"] = datetime.datetime.now(fuso_br).strftime("%H:%M:%S")
+    ultima_leitura["horario"] = agora.strftime("%H:%M:%S")
     
     salvar_leitura("temperatura", data.temperatura, "DS18B20")
-    msg = f"[{ultima_leitura['horario']}] Temperatura: {data.temperatura}°C"
+    msg = f"[{ultima_leitura['horario']}] Temperatura: {data.temperatura}°C | Tomada Alvo: {tomadaStatus}"
     registrar_log(msg)
     return {"status": "recebido"}
 
 @app.post('/temperatura_dht')
-async def rota_temperatura_dht(data: TemperatureData):
+def rota_temperatura_dht(data: TemperatureData):
+    global ultimaLeituraTimestamp
+    agora = datetime.datetime.now()
+    ultimaLeituraTimestamp = agora
+    
     salvar_leitura("temperatura", data.temperatura, "DHT22")
     msg = f"[{data.horario}] [ESP32] Temperatura DHT22: {data.temperatura}°C"
     registrar_log(msg)
     return {"status": "recebido"}
 
 @app.post('/umidade_dht')
-async def rota_umidade_dht(data: HumidityData):
+def rota_umidade_dht(data: HumidityData):
+    global ultimaLeituraTimestamp
+    ultimaLeituraTimestamp = datetime.datetime.now()
+    
     salvar_leitura("umidade", data.umidade, "DHT22")
     msg = f"[{data.horario}] [ESP32] Umidade DHT22: {data.umidade}%"
     registrar_log(msg)
@@ -229,7 +297,7 @@ async def rota_alexa(request: Request):
         }
     }
 
-@app.get('/', response_class=HTMLResponse)
+@app.api_route('/', response_class=HTMLResponse, methods=["GET", "HEAD"])
 async def pagina_principal():
     html = f"""
     <!DOCTYPE html>
@@ -291,6 +359,20 @@ async def pagina_principal():
 @app.get('/api/logs')
 async def api_logs():
     return list(reversed(logs_armazenados))
+
+@app.api_route('/check-status', methods=["GET", "HEAD"])
+async def check_status():
+    global ultimaLeituraTimestamp
+    global tomadaStatus
+
+    idade_leitura_segundos = -1
+    if ultimaLeituraTimestamp:
+        idade_leitura_segundos = (datetime.datetime.now() - ultimaLeituraTimestamp).total_seconds()
+
+    return {
+        "status": tomadaStatus,
+        "idade_leitura_segundos": int(idade_leitura_segundos)
+    }
 
 @app.get('/graficos', response_class=HTMLResponse)
 async def pagina_graficos(periodo: str = "1", resolucao: Optional[int] = None):
@@ -420,7 +502,7 @@ async def pagina_graficos(periodo: str = "1", resolucao: Optional[int] = None):
     return html
 
 @app.get('/api/dados')
-async def api_dados(periodo: int = 1, resolucao: Optional[int] = None):
+def api_dados(periodo: int = 1, resolucao: Optional[int] = None):
     if resolucao is None:
         resolucao = 10 if periodo <= 3 else 100
         
