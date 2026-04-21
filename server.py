@@ -23,9 +23,9 @@ TEMPO_PULSO_RESYNC = 30       # 30 segundos de pulso para forçar o Google Home
 
 # --- CONFIGURAÇÕES DE AQUECIMENTO ---
 em_pulso_resync: bool = False
-TEMP_CORTE = 9.0              # Desliga o aquecedor ao atingir 9.0°C
-HISTERESE = 0.5               # Religa se cair abaixo de 8.5°C (9.0 - 0.5)
-TEMP_MAX_OVERSHOOT = 11.0     # Teto de segurança pós-corte
+TEMP_CORTE = 9.75             # Ponto de desligamento alvo (meio da faixa 9.0-10.5)
+HISTERESE = 0.75              # Metade da faixa de histerese (0.75 = 1.5 / 2)
+TEMP_MAX_OVERSHOOT = 11.0     # Teto de segurança pós-corte (mantido)
 
 def get_db_connection():
     # Se DATABASE_URL for uma string de conexão completa, psycopg2.connect(DATABASE_URL) deveria funcionar.
@@ -115,23 +115,23 @@ def registrar_log(mensagem: str):
     if len(logs_armazenados) > LIMITE_HISTORICO:
         logs_armazenados.pop(0)
 
-async def trigger_resync_pulse():
-    global tomadaStatus, em_pulso_resync
-    if em_pulso_resync:
-        return # Impede disparos simultâneos
-    
-    em_pulso_resync = True
-    registrar_log(">>> [RESYNC] Detectada dessincronização física. Iniciando Pulso de Ressincronização...")
-    tomadaStatus = "on"
-    registrar_log(">>> [RESYNC] Estado forçado para 'on' para rearmar gatilho do Google Home.")
-    
-    await asyncio.sleep(TEMPO_PULSO_RESYNC)
-    
-    tomadaStatus = "off"
-    registrar_log(">>> [RESYNC] Pulso finalizado. Estado retornado para 'off'.")
-    em_pulso_resync = False
-
-@app.post('/boot')
+# # async def trigger_resync_pulse():
+# #     global tomadaStatus, em_pulso_resync
+# #     if em_pulso_resync:
+# #         return # Impede disparos simultâneos
+# #
+# #     em_pulso_resync = True
+# #     registrar_log(">>> [RESYNC] Detectada dessincronização física. Iniciando Pulso de Ressincronização...")
+# #     tomadaStatus = "on"
+# #     registrar_log(">>> [RESYNC] Estado forçado para 'on' para rearmar gatilho do Google Home.")
+# #
+# #     await asyncio.sleep(TEMPO_PULSO_RESYNC)
+# #
+# #     tomadaStatus = "off"
+# #     registrar_log(">>> [RESYNC] Pulso finalizado. Estado retornado para 'off'.")
+# #     em_pulso_resync = False
+# #
+# @app.post('/boot')
 async def rota_boot(data: BootData):
     msg = f"[{data.horario}] >>> SISTEMA REINICIADO: {data.status.upper()}"
     registrar_log(msg)
@@ -163,41 +163,27 @@ def rota_temperatura(data: TemperatureData, background_tasks: BackgroundTasks):
     agora = datetime.datetime.now()
     ultimaLeituraTimestamp = agora
     
-    temp_anterior = ultima_leitura["temperatura"]
-    
-    # Apenas atua se não estivermos no meio de um pulso de correção
-    if not em_pulso_resync:
-        # Lógica de Aquecimento
-        if data.temperatura <= (TEMP_CORTE - HISTERESE):
-            novo_status = "on"
-        elif data.temperatura >= TEMP_CORTE:
-            novo_status = "off"
-        else:
-            novo_status = tomadaStatus # Mantém estado atual dentro da histerese
-            
-        if novo_status != tomadaStatus:
-            tomadaStatus = novo_status
-            timestampMudancaEstado = agora
-            
-        # --- DETECÇÃO DE DESSINCRONIZAÇÃO (Aquecedor colado ON) ---
-        if tomadaStatus == "off":
-            # Passou do limite de overshoot natural
-            passou_do_teto = data.temperatura >= TEMP_MAX_OVERSHOOT
-            # Ou passou o tempo de inércia e temperatura AINDA ESTÁ SUBINDO
-            inercia_vencida_e_subindo = timestampMudancaEstado and (agora - timestampMudancaEstado).total_seconds() > LIMITE_INERCIA_TERMICA and temp_anterior is not None and data.temperatura > temp_anterior
-            
-            if passou_do_teto or inercia_vencida_e_subindo:
-                registrar_log(f"!!! [ALERTA] Aquecedor colado ON? (Temp: {data.temperatura}°C). Iniciando Resync.")
-                background_tasks.add_task(trigger_resync_pulse)
-    
+    # Lógica de Aquecimento
+    if data.temperatura <= (TEMP_CORTE - HISTERESE):
+        novo_status = "on"
+    elif data.temperatura >= TEMP_CORTE:
+        novo_status = "off"
+    else:
+        novo_status = tomadaStatus # Mantém estado atual dentro da histerese
+        
+    if novo_status != tomadaStatus:
+        tomadaStatus = novo_status
+        timestampMudancaEstado = agora
+        registrar_log(f"Server-side Hysteresis: Set to '{tomadaStatus}' (Temp: {data.temperatura}°C)")
+
     # Atualiza o cofre da Alexa com o horário corrigido
-    ultima_leitura["temperatura"] = data.temperatura
-    ultima_leitura["horario_fala"] = obter_horario_brasil_extenso()
-    
+    # ultima_leitura["temperatura"] = data.temperatura
+    # ultima_leitura["horario_fala"] = obter_horario_brasil_extenso()
+
     # Para o log visual, usamos apenas o relógio
-    fuso_br = pytz.timezone('America/Sao_Paulo')
-    ultima_leitura["horario"] = agora.strftime("%H:%M:%S")
-    
+    # fuso_br = pytz.timezone('America/Sao_Paulo')
+    # ultima_leitura["horario"] = agora.strftime("%H:%M:%S")
+
     salvar_leitura("temperatura", data.temperatura, "DS18B20")
     msg = f"[{ultima_leitura['horario']}] Temperatura: {data.temperatura}°C | Tomada Alvo: {tomadaStatus}"
     registrar_log(msg)
