@@ -23,9 +23,9 @@ TEMPO_PULSO_RESYNC = 30       # 30 segundos de pulso para forçar o Google Home
 
 # --- CONFIGURAÇÕES DE AQUECIMENTO ---
 em_pulso_resync: bool = False
-TEMP_CORTE = 9.75             # Ponto de desligamento alvo (meio da faixa 9.0-10.5)
-HISTERESE = 0.75              # Metade da faixa de histerese (0.75 = 1.5 / 2)
-TEMP_MAX_OVERSHOOT = 11.0     # Teto de segurança pós-corte (mantido)
+TEMP_CORTE = 13.0             # Ponto de desligamento alvo
+HISTERESE = 2.0               # Faixa de histerese (11.0 - 13.0)
+TEMP_MAX_OVERSHOOT = 14.0     # Teto de segurança pós-corte (mantido)
 
 def get_db_connection():
     # Se DATABASE_URL for uma string de conexão completa, psycopg2.connect(DATABASE_URL) deveria funcionar.
@@ -178,12 +178,11 @@ def rota_temperatura(data: TemperatureData, background_tasks: BackgroundTasks):
         registrar_log(f"Server-side Hysteresis: Set to '{tomadaStatus}' (Temp: {data.temperatura}°C)")
 
     # Atualiza o cofre da Alexa com o horário corrigido
-    # ultima_leitura["temperatura"] = data.temperatura
-    # ultima_leitura["horario_fala"] = obter_horario_brasil_extenso()
+    ultima_leitura["temperatura"] = data.temperatura
+    ultima_leitura["horario_fala"] = obter_horario_brasil_extenso()
 
     # Para o log visual, usamos apenas o relógio
-    # fuso_br = pytz.timezone('America/Sao_Paulo')
-    # ultima_leitura["horario"] = agora.strftime("%H:%M:%S")
+    ultima_leitura["horario"] = agora.strftime("%H:%M:%S")
 
     salvar_leitura("temperatura", data.temperatura, "DS18B20")
     msg = f"[{ultima_leitura['horario']}] Temperatura: {data.temperatura}°C | Tomada Alvo: {tomadaStatus}"
