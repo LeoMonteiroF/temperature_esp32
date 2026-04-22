@@ -131,9 +131,10 @@ def registrar_log(mensagem: str):
 # #     registrar_log(">>> [RESYNC] Pulso finalizado. Estado retornado para 'off'.")
 # #     em_pulso_resync = False
 # #
-# @app.post('/boot')
-async def rota_boot(data: BootData):
-    msg = f"[{data.horario}] >>> SISTEMA REINICIADO: {data.status.upper()}"
+@app.post('/boot')
+async def rota_boot(data: BootData, request: Request):
+    client_host = request.client.host
+    msg = f"[{data.horario}] >>> SISTEMA REINICIADO: {data.status.upper()} (IP: {client_host})"
     registrar_log(msg)
     return {"status": "ok"}
 
