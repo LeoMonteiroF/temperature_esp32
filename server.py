@@ -474,18 +474,18 @@ async def pagina_principal(periodo: str = "1", resolucao: Optional[int] = None):
                 <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #333;">
                     <button onclick="reloadConfig()" style="width: 100%; background: #bb86fc; color: #000; padding: 10px;">Recarregar Configurações</button>
                     <script>
-                        async function reloadConfig() {
-                            try {
-                                const resp = await fetch('/api/reload_config', { method: 'POST' });
-                                if(resp.ok) {
+                        async function reloadConfig() {{
+                            try {{
+                                const resp = await fetch('/api/reload_config', {{ method: 'POST' }});
+                                if(resp.ok) {{
                                     alert('Configurações recarregadas com sucesso!');
-                                } else {
+                                }} else {{
                                     alert('Erro ao recarregar configurações.');
-                                }
-                            } catch (e) {
+                                }}
+                            }} catch (e) {{
                                 alert('Erro de conexão ao recarregar.');
-                            }
-                        }
+                            }}
+                        }}
                     </script>
                 </div>
             </div>
