@@ -23,9 +23,18 @@ TEMPO_PULSO_RESYNC = 30       # 30 segundos de pulso para forçar o Google Home
 
 # --- CONFIGURAÇÕES DE AQUECIMENTO ---
 em_pulso_resync: bool = False
-TEMP_CORTE = 13.0             # Ponto de desligamento alvo
-HISTERESE = 2.0               # Faixa de histerese (11.0 - 13.0)
-TEMP_MAX_OVERSHOOT = 14.0     # Teto de segurança pós-corte (mantido)
+DEFAULT_CONFIG = {
+    "temp_corte": 13.0,
+    "histerese": 2.0,
+    "temp_max_overshoot": 14.0,
+    "derivada_critica": -15.0,  # Queda muito rápida (desativado por padrão)
+    "offset_piso": 0.5          # Quanto subir o piso
+}
+CONFIG = DEFAULT_CONFIG.copy()
+
+# Variáveis para cálculo da derivada
+ultima_temp_derivada = None
+ultimo_ts_derivada = None
 
 def get_db_connection():
     # Se DATABASE_URL for uma string de conexão completa, psycopg2.connect(DATABASE_URL) deveria funcionar.
@@ -54,11 +63,38 @@ def init_db():
             mensagem TEXT
         )
     ''')
+    # Tabela para configurações
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS configuracoes (
+            chave TEXT PRIMARY KEY,
+            valor REAL
+        )
+    ''')
     conn.commit()
     cursor.close()
     conn.close()
 
+def carregar_configuracoes():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT chave, valor FROM configuracoes')
+    rows = cursor.fetchall()
+    
+    if not rows:
+        # Tabela vazia, vamos inserir os valores padrão
+        for k, v in DEFAULT_CONFIG.items():
+            cursor.execute('INSERT INTO configuracoes (chave, valor) VALUES (%s, %s)', (k, v))
+        conn.commit()
+    else:
+        # Carregar do banco para a memória
+        for row in rows:
+            CONFIG[row[0]] = row[1]
+            
+    cursor.close()
+    conn.close()
+
 init_db()
+carregar_configuracoes()
 
 def salvar_leitura(tipo: str, valor: float, sensor: str):
     conn = get_db_connection()
@@ -161,13 +197,33 @@ def obter_horario_brasil_extenso():
 @app.post('/temperatura')
 def rota_temperatura(data: TemperatureData, background_tasks: BackgroundTasks):
     global ultimaLeituraTimestamp, tomadaStatus, timestampMudancaEstado
+    global ultima_temp_derivada, ultimo_ts_derivada
+    
     agora = datetime.datetime.now()
     ultimaLeituraTimestamp = agora
     
-    # Lógica de Aquecimento
-    if data.temperatura <= (TEMP_CORTE - HISTERESE):
+    # --- CÁLCULO DA DERIVADA ---
+    derivada = 0.0
+    if ultima_temp_derivada is not None and ultimo_ts_derivada is not None:
+        delta_temp = data.temperatura - ultima_temp_derivada
+        delta_time_min = (agora - ultimo_ts_derivada).total_seconds() / 60.0
+        if delta_time_min > 0:
+            derivada = delta_temp / delta_time_min
+            
+    ultima_temp_derivada = data.temperatura
+    ultimo_ts_derivada = agora
+
+    # --- LÓGICA DE AQUECIMENTO (Piso Dinâmico) ---
+    piso_histerese = CONFIG["temp_corte"] - CONFIG["histerese"]
+    usando_piso_dinamico = False
+    
+    if tomadaStatus == "off" and derivada <= CONFIG["derivada_critica"]:
+        piso_histerese += CONFIG["offset_piso"]
+        usando_piso_dinamico = True
+
+    if data.temperatura <= piso_histerese:
         novo_status = "on"
-    elif data.temperatura >= TEMP_CORTE:
+    elif data.temperatura >= CONFIG["temp_corte"]:
         novo_status = "off"
     else:
         novo_status = tomadaStatus # Mantém estado atual dentro da histerese
@@ -175,7 +231,10 @@ def rota_temperatura(data: TemperatureData, background_tasks: BackgroundTasks):
     if novo_status != tomadaStatus:
         tomadaStatus = novo_status
         timestampMudancaEstado = agora
-        registrar_log(f"Server-side Hysteresis: Set to '{tomadaStatus}' (Temp: {data.temperatura}°C)")
+        if tomadaStatus == "on" and usando_piso_dinamico:
+            registrar_log(f"Server-side Hysteresis: Set to 'on' (Anticipatory Trigger! Deriv: {derivada:.2f}°C/min, Floor: {piso_histerese:.1f}°C)")
+        else:
+            registrar_log(f"Server-side Hysteresis: Set to '{tomadaStatus}' (Temp: {data.temperatura}°C)")
 
     # Atualiza o cofre da Alexa com o horário corrigido
     ultima_leitura["temperatura"] = data.temperatura
@@ -284,23 +343,59 @@ async def rota_alexa(request: Request):
     }
 
 @app.api_route('/', response_class=HTMLResponse, methods=["GET", "HEAD"])
-async def pagina_principal():
+async def pagina_principal(periodo: str = "1", resolucao: Optional[int] = None):
+    if resolucao is None:
+        if periodo in ["1", "3"] or periodo.endswith('h'):
+            resolucao = 10
+        else:
+            resolucao = 100
+            
     html = f"""
     <!DOCTYPE html>
     <html>
         <head>
             <title>{TITULO_PAINEL}</title>
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
             <style>
-                body {{ font-family: sans-serif; background: #121212; color: #e0e0e0; margin: 0; padding: 20px; }}
-                h1 {{ color: #bb86fc; border-bottom: 1px solid #333; padding-bottom: 10px; }}
-                .user-info {{ color: #03dac6; margin-bottom: 20px; font-weight: bold; }}
-                .nav {{ margin-bottom: 20px; }}
-                .nav a {{ color: #bb86fc; text-decoration: none; margin-right: 15px; border: 1px solid #bb86fc; padding: 5px 10px; border-radius: 4px; }}
-                .terminal {{ background: #000; border: 1px solid #333; border-radius: 5px; padding: 15px; height: 70vh; overflow-y: auto; font-family: monospace; }}
+                body {{ font-family: sans-serif; background: #121212; color: #e0e0e0; margin: 0; display: flex; min-height: 100vh; }}
+                /* Sidebar Styles */
+                .sidebar {{ width: 250px; background: #1e1e1e; padding: 20px; border-right: 1px solid #333; display: flex; flex-direction: column; }}
+                .sidebar h2 {{ color: #bb86fc; margin-top: 0; font-size: 1.2rem; }}
+                .user-info {{ color: #03dac6; margin-bottom: 20px; font-weight: bold; font-size: 0.9rem; }}
+                .endpoint-list {{ list-style: none; padding: 0; margin: 0; flex-grow: 1; }}
+                .endpoint-list li {{ margin-bottom: 10px; }}
+                .endpoint-list a {{ color: #e0e0e0; text-decoration: none; display: block; padding: 10px; border-radius: 4px; background: #333; transition: background 0.2s; }}
+                .endpoint-list a:hover {{ background: #444; }}
+                .method-badge {{ display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 0.7rem; font-weight: bold; margin-right: 8px; }}
+                .method-get {{ background: #03dac6; color: #000; }}
+                .method-post {{ background: #bb86fc; color: #000; }}
+                
+                /* Main Content Styles */
+                .main-content {{ flex-grow: 1; padding: 20px; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; overflow-y: auto; }}
+                .header {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 20px; }}
+                .header h1 {{ color: #bb86fc; margin: 0; font-size: 1.5rem; }}
+                
+                /* Controls */
+                .controls {{ background: #1e1e1e; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }}
+                select, button, input {{ padding: 8px; border-radius: 4px; background: #333; color: #fff; border: 1px solid #555; }}
+                button {{ cursor: pointer; background: #03dac6; color: #000; font-weight: bold; border: none; }}
+                button:hover {{ background: #01b8a5; }}
+                
+                /* Charts Grid */
+                .charts-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }}
+                @media (max-width: 1000px) {{ .charts-grid {{ grid-template-columns: 1fr; }} }}
+                .chart-container {{ background: #1e1e1e; padding: 20px; border-radius: 8px; }}
+                canvas {{ max-height: 300px; }}
+                
+                /* Terminal */
+                .terminal-container {{ flex-grow: 1; display: flex; flex-direction: column; min-height: 250px; }}
+                .terminal-container h3 {{ color: #bb86fc; margin-top: 0; margin-bottom: 10px; font-size: 1.2rem; }}
+                .terminal {{ background: #000; border: 1px solid #333; border-radius: 5px; padding: 15px; flex-grow: 1; overflow-y: auto; font-family: monospace; }}
                 .line {{ border-bottom: 1px solid #1a1a1a; padding: 5px 0; color: #00ff41; }}
             </style>
             <script>
+                // Terminal Logic
                 let autoScroll = true;
                 function updateLogs() {{
                     fetch('/api/logs')
@@ -316,111 +411,8 @@ async def pagina_principal():
                             }}
                         }});
                 }}
-                setInterval(updateLogs, 3000);
                 
-                window.onload = () => {{
-                    const terminal = document.getElementById('terminal');
-                    terminal.addEventListener('scroll', () => {{
-                        // Se o usuário subir mais de 50px do fundo, desativa auto-scroll
-                        autoScroll = (terminal.scrollHeight - terminal.clientHeight <= terminal.scrollTop + 50);
-                    }});
-                    updateLogs();
-                }};
-            </script>
-        </head>
-        <body>
-            <h1>{TITULO_PAINEL}</h1>
-            <div class="user-info">Operador: {NOME_USUARIO}</div>
-            <div class="nav">
-                <a href="/graficos">Ver Gráficos</a>
-            </div>
-            <div id="terminal" class="terminal">
-                <div class='line'>Carregando logs...</div>
-            </div>
-        </body>
-    </html>
-    """
-    return html
-
-@app.get('/api/logs')
-async def api_logs():
-    return list(reversed(logs_armazenados))
-
-@app.api_route('/check-status', methods=["GET", "HEAD"])
-async def check_status():
-    global ultimaLeituraTimestamp
-    global tomadaStatus
-
-    idade_leitura_segundos = -1
-    if ultimaLeituraTimestamp:
-        idade_leitura_segundos = (datetime.datetime.now() - ultimaLeituraTimestamp).total_seconds()
-
-    return {
-        "status": tomadaStatus,
-        "idade_leitura_segundos": int(idade_leitura_segundos)
-    }
-
-@app.get('/graficos', response_class=HTMLResponse)
-async def pagina_graficos(periodo: str = "1", resolucao: Optional[int] = None):
-    # periodo em dias: 1, 3, 7, 14
-    # resolucao: a cada N medições
-    
-    if resolucao is None:
-        if periodo in ["1", "3"]:
-            resolucao = 10
-        else:
-            resolucao = 100
-    
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-        <head>
-            <title>Gráficos - {TITULO_PAINEL}</title>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-            <style>
-                body {{ font-family: sans-serif; background: #121212; color: #e0e0e0; margin: 0; padding: 20px; }}
-                h1 {{ color: #bb86fc; }}
-                .nav {{ margin-bottom: 20px; }}
-                .nav a {{ color: #bb86fc; text-decoration: none; margin-right: 15px; border: 1px solid #bb86fc; padding: 5px 10px; border-radius: 4px; }}
-                .controls {{ background: #1e1e1e; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }}
-                select, button {{ padding: 8px; border-radius: 4px; background: #333; color: #fff; border: 1px solid #555; }}
-                .chart-container {{ background: #1e1e1e; padding: 20px; border-radius: 8px; margin-bottom: 20px; }}
-                canvas {{ max-height: 400px; }}
-            </style>
-        </head>
-        <body>
-            <h1>Gráficos de Fermentação</h1>
-            <div class="nav">
-                <a href="/">Voltar ao Terminal</a>
-            </div>
-            
-            <form class="controls" method="get">
-                <div>
-                    <label>Período:</label>
-                    <select name="periodo">
-                        <option value="1" {"selected" if periodo=="1" else ""}>Último Dia</option>
-                        <option value="3" {"selected" if periodo=="3" else ""}>Últimos 3 Dias</option>
-                        <option value="7" {"selected" if periodo=="7" else ""}>Última Semana</option>
-                        <option value="14" {"selected" if periodo=="14" else ""}>Últimos 14 Dias</option>
-                    </select>
-                </div>
-                <div>
-                    <label>Resolução (cada N medições):</label>
-                    <input type="number" name="resolucao" value="{resolucao}" style="width: 60px; padding: 8px; border-radius: 4px; background: #333; color: #fff; border: 1px solid #555;">
-                    <small style="color: #888; display: block;">Padrão: 10 (1-3 dias) ou 100 (7-14 dias)</small>
-                </div>
-                <button type="submit">Atualizar</button>
-            </form>
-
-            <div class="chart-container">
-                <canvas id="tempChart"></canvas>
-            </div>
-            <div class="chart-container">
-                <canvas id="humChart"></canvas>
-            </div>
-
-            <script>
+                // Charts Logic
                 async function loadData() {{
                     const resp = await fetch(`/api/dados?periodo={periodo}&resolucao={resolucao}`);
                     const data = await resp.json();
@@ -431,30 +423,11 @@ async def pagina_graficos(periodo: str = "1", resolucao: Optional[int] = None):
                         data: {{
                             labels: data.labels,
                             datasets: [
-                                {{
-                                    label: 'DS18B20 (°C)',
-                                    data: data.temp_ds,
-                                    borderColor: '#bb86fc',
-                                    tension: 0.1,
-                                    spanGaps: true
-                                }},
-                                {{
-                                    label: 'DHT22 (°C)',
-                                    data: data.temp_dht,
-                                    borderColor: '#03dac6',
-                                    tension: 0.1,
-                                    spanGaps: true
-                                }}
+                                {{ label: 'DS18B20 (°C)', data: data.temp_ds, borderColor: '#bb86fc', tension: 0.1, spanGaps: true }},
+                                {{ label: 'DHT22 (°C)', data: data.temp_dht, borderColor: '#03dac6', tension: 0.1, spanGaps: true }}
                             ]
                         }},
-                        options: {{
-                            responsive: true,
-                            plugins: {{ title: {{ display: true, text: 'Temperatura', color: '#e0e0e0' }} }},
-                            scales: {{
-                                x: {{ ticks: {{ color: '#aaa' }} }},
-                                y: {{ ticks: {{ color: '#aaa' }} }}
-                            }}
-                        }}
+                        options: {{ responsive: true, plugins: {{ title: {{ display: true, text: 'Temperatura', color: '#e0e0e0' }} }}, scales: {{ x: {{ ticks: {{ color: '#aaa' }} }}, y: {{ ticks: {{ color: '#aaa' }} }} }} }}
                     }});
 
                     const ctxHum = document.getElementById('humChart').getContext('2d');
@@ -462,41 +435,107 @@ async def pagina_graficos(periodo: str = "1", resolucao: Optional[int] = None):
                         type: 'line',
                         data: {{
                             labels: data.labels,
-                            datasets: [{{
-                                label: 'Umidade DHT22 (%)',
-                                data: data.hum_dht,
-                                borderColor: '#cf6679',
-                                tension: 0.1,
-                                spanGaps: true
-                            }}]
+                            datasets: [{{ label: 'Umidade DHT22 (%)', data: data.hum_dht, borderColor: '#cf6679', tension: 0.1, spanGaps: true }}]
                         }},
-                        options: {{
-                            responsive: true,
-                            plugins: {{ title: {{ display: true, text: 'Umidade', color: '#e0e0e0' }} }},
-                            scales: {{
-                                x: {{ ticks: {{ color: '#aaa' }} }},
-                                y: {{ ticks: {{ color: '#aaa' }} }}
-                            }}
-                        }}
+                        options: {{ responsive: true, plugins: {{ title: {{ display: true, text: 'Umidade', color: '#e0e0e0' }} }}, scales: {{ x: {{ ticks: {{ color: '#aaa' }} }}, y: {{ ticks: {{ color: '#aaa' }} }} }} }}
                     }});
                 }}
-                loadData();
+
+                window.onload = () => {{
+                    const terminal = document.getElementById('terminal');
+                    terminal.addEventListener('scroll', () => {{
+                        autoScroll = (terminal.scrollHeight - terminal.clientHeight <= terminal.scrollTop + 50);
+                    }});
+                    updateLogs();
+                    setInterval(updateLogs, 3000);
+                    loadData();
+                }};
             </script>
+        </head>
+        <body>
+            <!-- Sidebar -->
+            <div class="sidebar">
+                <h2>{TITULO_PAINEL}</h2>
+                <div class="user-info">Operador: {NOME_USUARIO}</div>
+                
+                <h3 style="color: #888; font-size: 0.8rem; margin-top: 20px;">ENDPOINTS</h3>
+                <ul class="endpoint-list">
+                    <li><a href="/"><span class="method-badge method-get">GET</span> / (Dashboard)</a></li>
+                    <li><a href="/check-status" target="_blank"><span class="method-badge method-get">GET</span> /check-status</a></li>
+                    <li><a href="/api/logs" target="_blank"><span class="method-badge method-get">GET</span> /api/logs</a></li>
+                    <li><a href="/api/dados?periodo=1" target="_blank"><span class="method-badge method-get">GET</span> /api/dados</a></li>
+                    <li><a href="#" style="pointer-events: none; opacity: 0.7;"><span class="method-badge method-post">POST</span> /temperatura</a></li>
+                    <li><a href="#" style="pointer-events: none; opacity: 0.7;"><span class="method-badge method-post">POST</span> /temperatura_dht</a></li>
+                    <li><a href="#" style="pointer-events: none; opacity: 0.7;"><span class="method-badge method-post">POST</span> /umidade_dht</a></li>
+                    <li><a href="#" style="pointer-events: none; opacity: 0.7;"><span class="method-badge method-post">POST</span> /log</a></li>
+                    <li><a href="#" style="pointer-events: none; opacity: 0.7;"><span class="method-badge method-post">POST</span> /alexa</a></li>
+                </ul>
+            </div>
+            
+            <!-- Main Content -->
+            <div class="main-content">
+                <div class="header">
+                    <h1>Dashboard de Controle</h1>
+                </div>
+                
+                <!-- Chart Controls -->
+                <form class="controls" method="get">
+                    <div>
+                        <label>Período:</label>
+                        <select name="periodo">
+                            <option value="6h" {"selected" if periodo=="6h" else ""}>Últimas 6 Horas</option>
+                            <option value="12h" {"selected" if periodo=="12h" else ""}>Últimas 12 Horas</option>
+                            <option value="1" {"selected" if periodo=="1" else ""}>Último Dia</option>
+                            <option value="3" {"selected" if periodo=="3" else ""}>Últimos 3 Dias</option>
+                            <option value="7" {"selected" if periodo=="7" else ""}>Última Semana</option>
+                            <option value="14" {"selected" if periodo=="14" else ""}>Últimos 14 Dias</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>Resolução (cada N medições):</label>
+                        <input type="number" name="resolucao" value="{resolucao}" style="width: 60px;">
+                    </div>
+                    <button type="submit">Atualizar Gráficos</button>
+                </form>
+                
+                <!-- Charts -->
+                <div class="charts-grid">
+                    <div class="chart-container"><canvas id="tempChart"></canvas></div>
+                    <div class="chart-container"><canvas id="humChart"></canvas></div>
+                </div>
+                
+                <!-- Terminal -->
+                <div class="terminal-container">
+                    <h3>Console / Logs</h3>
+                    <div id="terminal" class="terminal">
+                        <div class='line'>Carregando logs...</div>
+                    </div>
+                </div>
+            </div>
         </body>
     </html>
     """
     return html
 
 @app.get('/api/dados')
-def api_dados(periodo: int = 1, resolucao: Optional[int] = None):
+def api_dados(periodo: str = "1", resolucao: Optional[int] = None):
     if resolucao is None:
-        resolucao = 10 if periodo <= 3 else 100
+        # Se for horas (6h, 12h) ou até 3 dias, resolução 10. Senão 100.
+        if periodo.endswith('h') or (periodo.isdigit() and int(periodo) <= 3):
+            resolucao = 10
+        else:
+            resolucao = 100
         
     conn = get_db_connection()
     cursor = conn.cursor()
     
     # Filtro de tempo
-    data_limite = (datetime.datetime.now() - datetime.timedelta(days=periodo))
+    if periodo.endswith('h'):
+        horas = int(periodo[:-1])
+        data_limite = (datetime.datetime.now() - datetime.timedelta(hours=horas))
+    else:
+        dias = int(periodo)
+        data_limite = (datetime.datetime.now() - datetime.timedelta(days=dias))
     
     # Busca dados
     cursor.execute('''
@@ -532,7 +571,11 @@ def api_dados(periodo: int = 1, resolucao: Optional[int] = None):
         # Formata timestamp para o gráfico (HH:mm se for 1 dia, DD/MM HH:mm se for mais)
         # ts já vem como objeto datetime do psycopg2
         dt = ts
-        label = dt.strftime('%H:%M') if periodo <= 1 else dt.strftime('%d/%m %H:%M')
+        # Formata timestamp para o gráfico (HH:mm se for < 1 dia ou exatamente 1 dia, DD/MM HH:mm se for mais)
+        if periodo.endswith('h') or periodo == "1":
+            label = dt.strftime('%H:%M')
+        else:
+            label = dt.strftime('%d/%m %H:%M')
         
         labels.append(label)
         
