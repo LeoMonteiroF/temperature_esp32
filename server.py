@@ -217,16 +217,21 @@ def rota_temperatura(data: TemperatureData, background_tasks: BackgroundTasks):
     ultimo_ts_derivada = agora
 
     # --- LÓGICA DE AQUECIMENTO (Piso Dinâmico) ---
-    piso_histerese = CONFIG["temp_corte"] - CONFIG["histerese"]
+    cfg_temp_corte = CONFIG.get("temp_corte", DEFAULT_CONFIG["temp_corte"])
+    cfg_histerese = CONFIG.get("histerese", DEFAULT_CONFIG["histerese"])
+    cfg_derivada_critica = CONFIG.get("derivada_critica", DEFAULT_CONFIG["derivada_critica"])
+    cfg_offset_piso = CONFIG.get("offset_piso", DEFAULT_CONFIG["offset_piso"])
+    
+    piso_histerese = cfg_temp_corte - cfg_histerese
     usando_piso_dinamico = False
     
-    if tomadaStatus == "off" and derivada <= CONFIG["derivada_critica"]:
-        piso_histerese += CONFIG["offset_piso"]
+    if tomadaStatus == "off" and derivada <= cfg_derivada_critica:
+        piso_histerese += cfg_offset_piso
         usando_piso_dinamico = True
 
     if data.temperatura <= piso_histerese:
         novo_status = "on"
-    elif data.temperatura >= CONFIG["temp_corte"]:
+    elif data.temperatura >= cfg_temp_corte:
         novo_status = "off"
     else:
         novo_status = tomadaStatus # Mantém estado atual dentro da histerese
