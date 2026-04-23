@@ -143,6 +143,9 @@ class BootData(BaseModel):
 class LogData(BaseModel):
     log: str
 
+class ConfigData(BaseModel):
+    configs: dict
+
 def registrar_log(mensagem: str):
     """Exibe no console e guarda na memória para o navegador."""
     print(mensagem)
@@ -393,8 +396,65 @@ async def pagina_principal(periodo: str = "1", resolucao: Optional[int] = None):
                 .terminal-container h3 {{ color: #bb86fc; margin-top: 0; margin-bottom: 10px; font-size: 1.2rem; }}
                 .terminal {{ background: #000; border: 1px solid #333; border-radius: 5px; padding: 15px; flex-grow: 1; overflow-y: auto; font-family: monospace; }}
                 .line {{ border-bottom: 1px solid #1a1a1a; padding: 5px 0; color: #00ff41; }}
+                
+                /* Modal Styles */
+                .modal-overlay {{ display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; justify-content: center; align-items: center; }}
+                .modal {{ background: #1e1e1e; padding: 20px; border-radius: 8px; width: 400px; max-width: 90%; border: 1px solid #333; }}
+                .modal h2 {{ color: #bb86fc; margin-top: 0; }}
+                .modal-form-group {{ margin-bottom: 15px; }}
+                .modal-form-group label {{ display: block; margin-bottom: 5px; color: #aaa; font-size: 0.9rem; }}
+                .modal-form-group input {{ width: 100%; box-sizing: border-box; padding: 8px; border-radius: 4px; background: #333; color: #fff; border: 1px solid #555; }}
+                .modal-buttons {{ display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }}
+                .btn-cancel {{ background: #333; color: #fff; }}
+                .btn-cancel:hover {{ background: #444; }}
             </style>
             <script>
+                // Settings Modal Logic
+                async function openSettings() {{
+                    const resp = await fetch('/api/config');
+                    const config = await resp.json();
+                    
+                    const container = document.getElementById('configFields');
+                    container.innerHTML = '';
+                    
+                    for (const [key, value] of Object.entries(config)) {{
+                        container.innerHTML += `
+                            <div class="modal-form-group">
+                                <label>${{key}}</label>
+                                <input type="number" step="0.1" id="cfg_${{key}}" value="${{value}}">
+                            </div>
+                        `;
+                    }}
+                    
+                    document.getElementById('settingsModal').style.display = 'flex';
+                }}
+                
+                function closeSettings() {{
+                    document.getElementById('settingsModal').style.display = 'none';
+                }}
+                
+                async function saveSettings() {{
+                    const inputs = document.querySelectorAll('input[id^="cfg_"]');
+                    const newConfig = {{}};
+                    inputs.forEach(input => {{
+                        const key = input.id.replace('cfg_', '');
+                        newConfig[key] = parseFloat(input.value);
+                    }});
+                    
+                    const resp = await fetch('/api/config', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ configs: newConfig }})
+                    }});
+                    
+                    if (resp.ok) {{
+                        alert('Configurações salvas com sucesso!');
+                        closeSettings();
+                    }} else {{
+                        alert('Erro ao salvar configurações.');
+                    }}
+                }}
+
                 // Terminal Logic
                 let autoScroll = true;
                 function updateLogs() {{
@@ -472,6 +532,7 @@ async def pagina_principal(periodo: str = "1", resolucao: Optional[int] = None):
                 </ul>
                 
                 <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #333;">
+                    <button onclick="openSettings()" style="width: 100%; background: #03dac6; color: #000; padding: 10px; margin-bottom: 10px;">Editar Configurações</button>
                     <button onclick="reloadConfig()" style="width: 100%; background: #bb86fc; color: #000; padding: 10px;">Recarregar Configurações</button>
                     <script>
                         async function reloadConfig() {{
@@ -530,10 +591,44 @@ async def pagina_principal(periodo: str = "1", resolucao: Optional[int] = None):
                     </div>
                 </div>
             </div>
+            
+            <!-- Settings Modal -->
+            <div id="settingsModal" class="modal-overlay">
+                <div class="modal">
+                    <h2>Configurações do Sistema</h2>
+                    <div id="configFields"></div>
+                    <div class="modal-buttons">
+                        <button class="btn-cancel" onclick="closeSettings()">Cancelar</button>
+                        <button onclick="saveSettings()">Salvar</button>
+                    </div>
+                </div>
+            </div>
         </body>
     </html>
     """
     return html
+
+@app.get('/api/config')
+def get_config():
+    return CONFIG
+
+@app.post('/api/config')
+def update_config(data: ConfigData):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    for k, v in data.configs.items():
+        if k in CONFIG:
+            try:
+                val = float(v)
+                cursor.execute('UPDATE configuracoes SET valor = %s WHERE chave = %s', (val, k))
+                CONFIG[k] = val
+            except (ValueError, TypeError):
+                pass
+    conn.commit()
+    cursor.close()
+    conn.close()
+    registrar_log("Configurações atualizadas via painel.")
+    return {"status": "ok"}
 
 @app.post('/api/reload_config')
 async def reload_config():
