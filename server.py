@@ -470,6 +470,24 @@ async def pagina_principal(periodo: str = "1", resolucao: Optional[int] = None):
                     <li><a href="#" style="pointer-events: none; opacity: 0.7;"><span class="method-badge method-post">POST</span> /log</a></li>
                     <li><a href="#" style="pointer-events: none; opacity: 0.7;"><span class="method-badge method-post">POST</span> /alexa</a></li>
                 </ul>
+                
+                <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #333;">
+                    <button onclick="reloadConfig()" style="width: 100%; background: #bb86fc; color: #000; padding: 10px;">Recarregar Configurações</button>
+                    <script>
+                        async function reloadConfig() {
+                            try {
+                                const resp = await fetch('/api/reload_config', { method: 'POST' });
+                                if(resp.ok) {
+                                    alert('Configurações recarregadas com sucesso!');
+                                } else {
+                                    alert('Erro ao recarregar configurações.');
+                                }
+                            } catch (e) {
+                                alert('Erro de conexão ao recarregar.');
+                            }
+                        }
+                    </script>
+                </div>
             </div>
             
             <!-- Main Content -->
@@ -516,6 +534,12 @@ async def pagina_principal(periodo: str = "1", resolucao: Optional[int] = None):
     </html>
     """
     return html
+
+@app.post('/api/reload_config')
+async def reload_config():
+    carregar_configuracoes()
+    registrar_log("Configurações recarregadas do banco de dados pelo Dashboard.")
+    return {"status": "ok", "config": CONFIG}
 
 @app.get('/api/dados')
 def api_dados(periodo: str = "1", resolucao: Optional[int] = None):
