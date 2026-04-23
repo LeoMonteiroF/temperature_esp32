@@ -336,6 +336,32 @@ async def rota_alexa(request: Request):
             }
         }
 
+    # 4. PERGUNTA DE CONFIGURAÇÃO
+    elif intent_name == "PerguntaConfiguracaoIntent":
+        temp_corte = str(CONFIG.get("temp_corte", 13.0)).replace('.', ',')
+        histerese = str(CONFIG.get("histerese", 2.0)).replace('.', ',')
+        temp_max = str(CONFIG.get("temp_max_overshoot", 14.0)).replace('.', ',')
+        
+        derivada = CONFIG.get("derivada_critica", -15.0)
+        derivada_str = str(abs(derivada)).replace('.', ',')
+        
+        offset = str(CONFIG.get("offset_piso", 0.5)).replace('.', ',')
+        
+        fala = (
+            f"Configurações vigentes: Temperatura alvo de {temp_corte} graus, com faixa de variação permitida de {histerese} graus. "
+            f"O limite de segurança máximo é de {temp_max} graus. "
+            f"A proteção anti-compressor está configurada para identificar queda maior que {derivada_str} graus por minuto, "
+            f"subindo o piso temporariamente em {offset} graus para previnir undershoot."
+        )
+        
+        return {
+            "version": "1.0",
+            "response": {
+                "outputSpeech": {"type": "PlainText", "text": fala},
+                "shouldEndSession": True
+            }
+        }
+
     # Fallback para qualquer outra coisa
     return {
         "version": "1.0",
