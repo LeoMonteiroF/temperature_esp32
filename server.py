@@ -752,6 +752,33 @@ def api_dados(periodo: str = "1", resolucao: Optional[int] = None):
         "hum_dht": hum_dht
     }
 
+@app.get('/api/logs')
+async def api_logs():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT mensagem FROM logs ORDER BY id DESC LIMIT %s', (LIMITE_HISTORICO,))
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    
+    logs = [row[0] for row in rows]
+    logs.reverse() # Mais antigos primeiro, para que o mais recente fique no fundo do terminal
+    return logs
+
+@app.api_route('/check-status', methods=["GET", "HEAD"])
+async def check_status():
+    global ultimaLeituraTimestamp
+    global tomadaStatus
+
+    idade_leitura_segundos = -1
+    if ultimaLeituraTimestamp:
+        idade_leitura_segundos = (datetime.datetime.now() - ultimaLeituraTimestamp).total_seconds()
+
+    return {
+        "status": tomadaStatus,
+        "idade_leitura_segundos": int(idade_leitura_segundos)
+    }
+
 if __name__ == "__main__":
     # O Render define a porta automaticamente na variável PORT
     porta = int(os.getenv("PORT", 5000))
