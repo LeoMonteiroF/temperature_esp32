@@ -286,6 +286,12 @@ async def rota_log(data: LogData):
     registrar_log(msg)
     return {"status": "log_registrado"}
 
+@app.post('/alexa_ai')
+async def rota_alexa_ia(request: Request, background_tasks: BackgroundTasks):
+    """ Rota EXCLUSIVA para a nova Skill da IA no Amazon Developer Console """
+    req_data = await request.json()
+    return await alexa_router.processar_alexa_ia(req_data, background_tasks)
+
 @app.post('/alexa')
 async def rota_alexa(request: Request, background_tasks: BackgroundTasks):
     req_data = await request.json()
@@ -293,11 +299,6 @@ async def rota_alexa(request: Request, background_tasks: BackgroundTasks):
     intent_name = req_data.get("request", {}).get("intent", {}).get("name")
     session_id = req_data.get("session", {}).get("sessionId")
     
-    # 0. INTERCEPTAÇÃO DA INTELIGÊNCIA ARTIFICIAL (ROTEADOR)
-    # Se a intenção for iniciar a IA, ou se já estivermos no meio de uma conversa da IA (sessão ativa)
-    if intent_name == "ConversaIAIntent" or session_id in alexa_router.active_sessions:
-        return await alexa_router.processar_alexa_ia(req_data, background_tasks)
-        
     # IMPORTANTE: Garante que pegamos os atributos da sessão corretamente para as rotas normais
     session_attrs = req_data.get("session", {}).get("attributes", {})
     if session_attrs is None:
@@ -568,6 +569,7 @@ async def pagina_principal(periodo: str = "1", resolucao: Optional[int] = None):
                     <li><a href="#" style="pointer-events: none; opacity: 0.7;"><span class="method-badge method-post">POST</span> /umidade_dht</a></li>
                     <li><a href="#" style="pointer-events: none; opacity: 0.7;"><span class="method-badge method-post">POST</span> /log</a></li>
                     <li><a href="#" style="pointer-events: none; opacity: 0.7;"><span class="method-badge method-post">POST</span> /alexa</a></li>
+                    <li><a href="#" style="pointer-events: none; opacity: 0.7;"><span class="method-badge method-post">POST</span> /alexa_ai</a></li>
                 </ul>
                 
                 <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #333;">
