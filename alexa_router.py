@@ -12,7 +12,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 # Mapeamento de personagens para seus respectivos modelos na API
 MODELOS = {
     "eremita": "gemini-3-flash-preview",
-    "sabio": "gemma-4-31b-it" # Pego do models.json
+    "sabio": "gemini-3.1-flash-lite-preview" # Alterado para versão mais rápida para evitar o timeout de 8s da Alexa
 }
 
 # Em memória: dicionário que mapeia o sessionId da Alexa para o estado da conversa.
