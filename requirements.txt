@@ -4,3 +4,4 @@ pydantic
 pytz
 psycopg2-binary
 httpx
+jinja2
