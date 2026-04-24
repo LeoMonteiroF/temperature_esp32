@@ -134,7 +134,7 @@ async def processar_alexa_ia(req_data: dict, background_tasks: BackgroundTasks):
     
     # 1. Tratamento do LaunchRequest (quando apenas abrem a skill sem perguntar direto)
     if req_type == "LaunchRequest":
-        active_sessions[session_id] = {"messages": [], "mode": "eremita"} # Eremita é o padrão
+        active_sessions[session_id] = {"messages": [], "mode": None} # Inicia sem modo
         return build_alexa_response("Roteamento IA ativado.", False)
         
     # 2. Tratamento de Encerramento
@@ -158,48 +158,42 @@ async def processar_alexa_ia(req_data: dict, background_tasks: BackgroundTasks):
             return build_alexa_response("Fim do modo I.A.", True)
             
         slots = intent.get("slots", {})
-        user_text = ""
-        for slot_name, slot_data in slots.items():
-            if slot_data.get("value"):
-                user_text = slot_data.get("value")
-                break
-                
-        if not user_text:
-            return build_alexa_response("Não escutei direito.", False)
+        
+        # Recupera os dois slots explícitos nativos
+        personagem_slot = slots.get("personagem", {}).get("value", "")
+        if personagem_slot:
+            personagem_slot = personagem_slot.lower().strip()
             
-        # Recupera ou inicializa a sessão
+        query_slot = slots.get("query", {}).get("value", "")
+        if query_slot:
+            query_slot = query_slot.strip()
+            
+        # Inicializa a sessão se não existir, SEM modo padrão
         if session_id not in active_sessions:
-            active_sessions[session_id] = {"messages": [], "mode": "eremita"}
+            active_sessions[session_id] = {"messages": [], "mode": None}
             
         session_data = active_sessions[session_id]
-        text_lower = user_text.lower().strip()
         
-        # Lógica de roteamento baseada na fala inicial
-        # Se a frase contém a invocação, definimos o modo e cortamos essa parte para não sujar o prompt da IA
-        if text_lower.startswith("pergunte ao eremita"):
+        # Atualiza o modo da sessão se o usuário informou o slot de personagem
+        if personagem_slot in ["eremita", "o eremita"]:
             session_data["mode"] = "eremita"
-            user_text = re.sub(r'(?i)^pergunte ao eremita\s*(que|qual|como|onde|por que)?\s*', '', user_text).strip()
+        elif personagem_slot in ["sabio", "sábio", "o sabio", "o sábio"]:
+            session_data["mode"] = "sabio"
             
-            # Se ele só disser "pergunte ao eremita", sem query, a gente avisa:
-            if not user_text:
+        # Trava obrigatória: a sessão precisa ter um agente definido
+        if session_data["mode"] is None:
+            return build_alexa_response("Estabeleça o agente de I.A.", False)
+            
+        # Verifica se o usuário mandou apenas o personagem sem fazer a pergunta ainda
+        if not query_slot:
+            if session_data["mode"] == "eremita":
                 return build_alexa_response("Gemini ativado, pode perguntar.", False)
-
-        elif text_lower.startswith("pergunte ao sabio") or text_lower.startswith("pergunte ao sábio"):
-            session_data["mode"] = "sabio"
-            user_text = re.sub(r'(?i)^pergunte ao s[áa]bio\s*(que|qual|como|onde|por que)?\s*', '', user_text).strip()
-            
-            if not user_text:
+            else:
                 return build_alexa_response("Gema ativado, pode perguntar.", False)
+                
+        user_text = query_slot
         
-        # Ou se for logo após abrir a skill e o cara só fala o nome
-        elif text_lower in ["ao eremita", "eremita", "o eremita"]:
-            session_data["mode"] = "eremita"
-            return build_alexa_response("Gemini ativado, pode perguntar.", False)
-        elif text_lower in ["ao sabio", "sabio", "o sabio", "ao sábio", "sábio", "o sábio"]:
-            session_data["mode"] = "sabio"
-            return build_alexa_response("Gema ativado, pode perguntar.", False)
-            
-        # Caso o usuário já esteja falando no meio da sessão
+        # A partir daqui, temos o agente estabelecido e a query preenchida
         messages = session_data["messages"]
         model_to_use = MODELOS[session_data["mode"]]
         
