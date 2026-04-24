@@ -11,10 +11,6 @@ from typing import List, Optional
 
 app = FastAPI()
 
-# Incluindo o roteador de IA da Alexa (Modo Eremita/Sábio)
-import alexa_router
-app.include_router(alexa_router.router)
-
 # --- BANCO DE DADOS (Supabase/PostgreSQL) ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 
