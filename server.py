@@ -313,7 +313,7 @@ async def rota_alexa(request: Request):
         return {
             "version": "1.0",
             "response": {
-                "outputSpeech": {"type": "PlainText", "text": "Ok, estarei monitorando. Até mais!"},
+                "outputSpeech": {"type": "PlainText", "text": "Ok"},
                 "shouldEndSession": True
             }
         }
