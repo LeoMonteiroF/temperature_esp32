@@ -322,13 +322,16 @@ async def pagina_principal(request: Request, periodo: str = "1", resolucao: Opti
         else:
             resolucao = 100
             
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
-        "TITULO_PAINEL": TITULO_PAINEL,
-        "NOME_USUARIO": NOME_USUARIO,
-        "periodo": periodo,
-        "resolucao": resolucao
-    })
+    return templates.TemplateResponse(
+        request=request,
+        name="dashboard.html",
+        context={
+            "TITULO_PAINEL": TITULO_PAINEL,
+            "NOME_USUARIO": NOME_USUARIO,
+            "periodo": periodo,
+            "resolucao": resolucao
+        }
+    )
 
 @app.get('/api/config')
 def get_config():
