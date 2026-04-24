@@ -13,6 +13,17 @@ app = FastAPI()
 
 import alexa_router
 
+FUSO_BR = pytz.timezone('America/Sao_Paulo')
+
+def agora_br():
+    return datetime.datetime.now(FUSO_BR)
+
+def utc_to_br(dt_utc_naive):
+    if dt_utc_naive is None:
+        return None
+    dt_utc_aware = dt_utc_naive.replace(tzinfo=pytz.utc)
+    return dt_utc_aware.astimezone(FUSO_BR)
+
 # --- BANCO DE DADOS (Supabase/PostgreSQL) ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -204,7 +215,7 @@ def rota_temperatura(data: TemperatureData, background_tasks: BackgroundTasks):
     global ultimaLeituraTimestamp, tomadaStatus, timestampMudancaEstado
     global ultima_temp_derivada, ultimo_ts_derivada
     
-    agora = datetime.datetime.now()
+    agora = datetime.datetime.utcnow()
     ultimaLeituraTimestamp = agora
     
     # --- CÁLCULO DA DERIVADA ---
@@ -251,7 +262,7 @@ def rota_temperatura(data: TemperatureData, background_tasks: BackgroundTasks):
     ultima_leitura["horario_fala"] = obter_horario_brasil_extenso()
 
     # Para o log visual, usamos apenas o relógio
-    ultima_leitura["horario"] = agora.strftime("%H:%M:%S")
+    ultima_leitura["horario"] = agora_br().strftime("%H:%M:%S")
 
     salvar_leitura("temperatura", data.temperatura, "DS18B20")
     msg = f"[{ultima_leitura['horario']}] Temperatura: {data.temperatura}°C | Tomada Alvo: {tomadaStatus}"
@@ -261,7 +272,7 @@ def rota_temperatura(data: TemperatureData, background_tasks: BackgroundTasks):
 @app.post('/temperatura_dht')
 def rota_temperatura_dht(data: TemperatureData):
     global ultimaLeituraTimestamp
-    agora = datetime.datetime.now()
+    agora = datetime.datetime.utcnow()
     ultimaLeituraTimestamp = agora
     
     salvar_leitura("temperatura", data.temperatura, "DHT22")
@@ -272,7 +283,7 @@ def rota_temperatura_dht(data: TemperatureData):
 @app.post('/umidade_dht')
 def rota_umidade_dht(data: HumidityData):
     global ultimaLeituraTimestamp
-    ultimaLeituraTimestamp = datetime.datetime.now()
+    ultimaLeituraTimestamp = datetime.datetime.utcnow()
     
     salvar_leitura("umidade", data.umidade, "DHT22")
     msg = f"[{data.horario}] [ESP32] Umidade DHT22: {data.umidade}%"
@@ -281,8 +292,8 @@ def rota_umidade_dht(data: HumidityData):
 
 @app.post('/log')
 async def rota_log(data: LogData):
-    agora = datetime.datetime.now().strftime("[%H:%M:%S]")
-    msg = f"[{agora}] [ESP32] {data.log}"
+    agora_str = agora_br().strftime("[%H:%M:%S]")
+    msg = f"[{agora_str}] [ESP32] {data.log}"
     registrar_log(msg)
     return {"status": "log_registrado"}
 
@@ -692,10 +703,10 @@ def api_dados(periodo: str = "1", resolucao: Optional[int] = None):
     # Filtro de tempo
     if periodo.endswith('h'):
         horas = int(periodo[:-1])
-        data_limite = (datetime.datetime.now() - datetime.timedelta(hours=horas))
+        data_limite = (datetime.datetime.utcnow() - datetime.timedelta(hours=horas))
     else:
         dias = int(periodo)
-        data_limite = (datetime.datetime.now() - datetime.timedelta(days=dias))
+        data_limite = (datetime.datetime.utcnow() - datetime.timedelta(days=dias))
     
     # Busca dados
     cursor.execute('''
@@ -730,7 +741,7 @@ def api_dados(periodo: str = "1", resolucao: Optional[int] = None):
         
         # Formata timestamp para o gráfico (HH:mm se for 1 dia, DD/MM HH:mm se for mais)
         # ts já vem como objeto datetime do psycopg2
-        dt = ts
+        dt = utc_to_br(ts)
         # Formata timestamp para o gráfico (HH:mm se for < 1 dia ou exatamente 1 dia, DD/MM HH:mm se for mais)
         if periodo.endswith('h') or periodo == "1":
             label = dt.strftime('%H:%M')
@@ -782,7 +793,7 @@ async def check_status():
 
     idade_leitura_segundos = -1
     if ultimaLeituraTimestamp:
-        idade_leitura_segundos = (datetime.datetime.now() - ultimaLeituraTimestamp).total_seconds()
+        idade_leitura_segundos = (datetime.datetime.utcnow() - ultimaLeituraTimestamp).total_seconds()
 
     return {
         "status": tomadaStatus,
