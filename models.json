@@ -1,0 +1,14 @@
+{
+  "api": [
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-3-flash-preview",
+    "gemma-4-26b-a4b-it",
+    "gemma-4-31b-it"
+  ],
+  "llama": [
+    "qwen2.5-coder",
+    "llama-3-8b"
+  ]
+}

@@ -3,10 +3,8 @@ import httpx
 import re
 import json
 import psycopg2
-from fastapi import APIRouter, Request, BackgroundTasks
+from fastapi import BackgroundTasks
 from typing import Dict, List, Any
-
-router = APIRouter()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -127,13 +125,11 @@ def build_alexa_response(text: str, should_end_session: bool) -> dict:
         }
     }
 
-@router.post('/alexa_ai')
-async def alexa_endpoint(request: Request, background_tasks: BackgroundTasks):
-    data = await request.json()
-    req_body = data.get("request", {})
+async def processar_alexa_ia(req_data: dict, background_tasks: BackgroundTasks):
+    req_body = req_data.get("request", {})
     req_type = req_body.get("type")
     
-    session = data.get("session", {})
+    session = req_data.get("session", {})
     session_id = session.get("sessionId", "unknown_session")
     
     # 1. Tratamento do LaunchRequest (quando apenas abrem a skill sem perguntar direto)
@@ -219,11 +215,3 @@ async def alexa_endpoint(request: Request, background_tasks: BackgroundTasks):
         return build_alexa_response(ai_response_text, False)
         
     return build_alexa_response("Ação não reconhecida no templo.", True)
-
-@router.get('/health_ai')
-def health_check():
-    """Rota simples para o Render testar se o roteador de IA está vivo."""
-    return {
-        "status": "ok", 
-        "active_sessions": len(active_sessions)
-    }

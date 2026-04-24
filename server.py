@@ -11,9 +11,7 @@ from typing import List, Optional
 
 app = FastAPI()
 
-# Incluindo o roteador de IA da Alexa (Modo Eremita/Sábio)
 import alexa_router
-app.include_router(alexa_router.router)
 
 # --- BANCO DE DADOS (Supabase/PostgreSQL) ---
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -289,12 +287,18 @@ async def rota_log(data: LogData):
     return {"status": "log_registrado"}
 
 @app.post('/alexa')
-async def rota_alexa(request: Request):
+async def rota_alexa(request: Request, background_tasks: BackgroundTasks):
     req_data = await request.json()
     req_type = req_data.get("request", {}).get("type")
     intent_name = req_data.get("request", {}).get("intent", {}).get("name")
+    session_id = req_data.get("session", {}).get("sessionId")
     
-    # IMPORTANTE: Garante que pegamos os atributos da sessão corretamente
+    # 0. INTERCEPTAÇÃO DA INTELIGÊNCIA ARTIFICIAL (ROTEADOR)
+    # Se a intenção for iniciar a IA, ou se já estivermos no meio de uma conversa da IA (sessão ativa)
+    if intent_name == "ConversaIAIntent" or session_id in alexa_router.active_sessions:
+        return await alexa_router.processar_alexa_ia(req_data, background_tasks)
+        
+    # IMPORTANTE: Garante que pegamos os atributos da sessão corretamente para as rotas normais
     session_attrs = req_data.get("session", {}).get("attributes", {})
     if session_attrs is None:
         session_attrs = {}
