@@ -159,11 +159,7 @@ async def processar_alexa_ia(req_data: dict, background_tasks: BackgroundTasks):
             
         slots = intent.get("slots", {})
         
-        # Recupera os dois slots explícitos nativos
-        personagem_slot = slots.get("personagem", {}).get("value", "")
-        if personagem_slot:
-            personagem_slot = personagem_slot.lower().strip()
-            
+        # Recupera o slot nativo
         query_slot = slots.get("query", {}).get("value", "")
         if query_slot:
             query_slot = query_slot.strip()
@@ -174,10 +170,10 @@ async def processar_alexa_ia(req_data: dict, background_tasks: BackgroundTasks):
             
         session_data = active_sessions[session_id]
         
-        # Atualiza o modo da sessão se o usuário informou o slot de personagem
-        if personagem_slot in ["eremita", "o eremita"]:
+        # Atualiza o modo da sessão baseando-se no nome da Intent (Para contornar o limite de 1 slot da Amazon)
+        if intent_name == "EremitaIntent":
             session_data["mode"] = "eremita"
-        elif personagem_slot in ["sabio", "sábio", "o sabio", "o sábio"]:
+        elif intent_name == "SabioIntent":
             session_data["mode"] = "sabio"
             
         # Trava obrigatória: a sessão precisa ter um agente definido
