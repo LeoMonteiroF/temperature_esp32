@@ -51,11 +51,9 @@ def init_db(default_config):
         )
     ''')
     
-    # Inicializa configurações padrão se a tabela estiver vazia
-    cursor.execute('SELECT COUNT(*) FROM configuracoes')
-    if cursor.fetchone()[0] == 0:
-        for k, v in default_config.items():
-            cursor.execute('INSERT INTO configuracoes (chave, valor) VALUES (%s, %s)', (k, v))
+    # Garante que todas as chaves do default_config existam no banco
+    for k, v in default_config.items():
+        cursor.execute('INSERT INTO configuracoes (chave, valor) VALUES (%s, %s) ON CONFLICT (chave) DO NOTHING', (k, v))
             
     conn.commit()
     cursor.close()

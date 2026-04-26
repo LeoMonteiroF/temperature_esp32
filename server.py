@@ -25,14 +25,19 @@ timestampMudancaEstado: Optional[datetime.datetime] = None
 LIMITE_INERCIA_TERMICA = 300  # 5 minutos para detectar dessincronização
 TEMPO_PULSO_RESYNC = 30       # 30 segundos de pulso para forçar o Google Home
 
-# --- CONFIGURAÇÕES DE AQUECIMENTO ---
-em_pulso_resync: bool = False
+# --- CONFIGURAÇÕES DE CONTROLE ---
+MODO_AQUECIMENTO = 0.0
+MODO_RESFRIAMENTO = 1.0
+
 DEFAULT_CONFIG = {
-    "temp_corte": 13.0,
-    "histerese": 2.0,
-    "temp_max_overshoot": 14.0,
-    "derivada_critica": -15.0,  # Queda muito rápida (desativado por padrão)
-    "offset_piso": 0.5          # Quanto subir o piso
+    "modo": MODO_AQUECIMENTO,
+    "temp_corte_aquecimento": 13.0,
+    "histerese_aquecimento": 2.0,
+    "temp_corte_resfriamento": 18.0,
+    "histerese_resfriamento": 2.0,
+    "temp_max_overshoot": 14.0, # Segurança (usado mais em aquecimento)
+    "derivada_critica": -15.0,  # Queda/Subida muito rápida
+    "offset_piso": 0.5          # Ajuste antecipatório
 }
 CONFIG = DEFAULT_CONFIG.copy()
 
@@ -147,33 +152,60 @@ def rota_temperatura(data: TemperatureData, background_tasks: BackgroundTasks):
     ultima_temp_derivada = data.temperatura
     ultimo_ts_derivada = agora
 
-    # --- LÓGICA DE AQUECIMENTO (Piso Dinâmico) ---
-    cfg_temp_corte = CONFIG.get("temp_corte", DEFAULT_CONFIG["temp_corte"])
-    cfg_histerese = CONFIG.get("histerese", DEFAULT_CONFIG["histerese"])
+    # --- LÓGICA DE CONTROLE (Dual Mode) ---
+    modo = CONFIG.get("modo", MODO_AQUECIMENTO)
     cfg_derivada_critica = CONFIG.get("derivada_critica", DEFAULT_CONFIG["derivada_critica"])
     cfg_offset_piso = CONFIG.get("offset_piso", DEFAULT_CONFIG["offset_piso"])
     
-    piso_histerese = cfg_temp_corte - cfg_histerese
-    usando_piso_dinamico = False
+    usando_antecipacao = False
     
-    if tomadaStatus == "off" and derivada <= cfg_derivada_critica:
-        piso_histerese += cfg_offset_piso
-        usando_piso_dinamico = True
+    if modo == MODO_AQUECIMENTO:
+        corte = CONFIG.get("temp_corte_aquecimento", DEFAULT_CONFIG["temp_corte_aquecimento"])
+        histerese = CONFIG.get("histerese_aquecimento", DEFAULT_CONFIG["histerese_aquecimento"])
+        
+        trigger_on = corte - histerese
+        trigger_off = corte
+        
+        # Antecipação no aquecimento: Se cai muito rápido, sobe o piso para ligar antes
+        if tomadaStatus == "off" and derivada <= cfg_derivada_critica:
+            trigger_on += cfg_offset_piso
+            usando_antecipacao = True
 
-    if data.temperatura <= piso_histerese:
-        novo_status = "on"
-    elif data.temperatura >= cfg_temp_corte:
-        novo_status = "off"
-    else:
-        novo_status = tomadaStatus # Mantém estado atual dentro da histerese
+        if data.temperatura <= trigger_on:
+            novo_status = "on"
+        elif data.temperatura >= trigger_off:
+            novo_status = "off"
+        else:
+            novo_status = tomadaStatus
+
+    else: # MODO_RESFRIAMENTO
+        corte = CONFIG.get("temp_corte_resfriamento", DEFAULT_CONFIG["temp_corte_resfriamento"])
+        histerese = CONFIG.get("histerese_resfriamento", DEFAULT_CONFIG["histerese_resfriamento"])
+        
+        trigger_on = corte + histerese
+        trigger_off = corte
+        
+        # Antecipação no resfriamento: Se sobe muito rápido, baixa o teto para ligar antes
+        # Nota: derivada positiva significa temperatura subindo
+        if tomadaStatus == "off" and derivada >= abs(cfg_derivada_critica):
+            trigger_on -= cfg_offset_piso
+            usando_antecipacao = True
+
+        if data.temperatura >= trigger_on:
+            novo_status = "on"
+        elif data.temperatura <= trigger_off:
+            novo_status = "off"
+        else:
+            novo_status = tomadaStatus
         
     if novo_status != tomadaStatus:
         tomadaStatus = novo_status
         timestampMudancaEstado = agora
-        if tomadaStatus == "on" and usando_piso_dinamico:
-            registrar_log(f"Server-side Hysteresis: Set to 'on' (Anticipatory Trigger! Deriv: {derivada:.2f}°C/min, Floor: {piso_histerese:.1f}°C)")
+        tipo_acao = "Aquecimento" if modo == MODO_AQUECIMENTO else "Resfriamento"
+        if tomadaStatus == "on" and usando_antecipacao:
+            registrar_log(f"Server Hysteresis ({tipo_acao}): Set to 'on' (Anticipatory Trigger! Deriv: {derivada:.2f}°C/min)")
         else:
-            registrar_log(f"Server-side Hysteresis: Set to '{tomadaStatus}' (Temp: {data.temperatura}°C)")
+            registrar_log(f"Server Hysteresis ({tipo_acao}): Set to '{tomadaStatus}' (Temp: {data.temperatura}°C)")
 
     # Atualiza o cofre da Alexa com o horário corrigido
     ultima_leitura["temperatura"] = data.temperatura
@@ -281,20 +313,28 @@ async def rota_alexa(request: Request, background_tasks: BackgroundTasks):
 
     # 4. PERGUNTA DE CONFIGURAÇÃO
     elif intent_name == "PerguntaConfiguracaoIntent":
-        temp_corte = str(CONFIG.get("temp_corte", 13.0)).replace('.', ',')
-        histerese = str(CONFIG.get("histerese", 2.0)).replace('.', ',')
-        temp_max = str(CONFIG.get("temp_max_overshoot", 14.0)).replace('.', ',')
+        modo = CONFIG.get("modo", MODO_AQUECIMENTO)
         
+        if modo == MODO_AQUECIMENTO:
+            corte = str(CONFIG.get("temp_corte_aquecimento", 13.0)).replace('.', ',')
+            histerese = str(CONFIG.get("histerese_aquecimento", 2.0)).replace('.', ',')
+            tipo = "aquecimento"
+            detalhe_gatilho = f"liga em {str(float(corte.replace(',','.')) - float(histerese.replace(',','.'))).replace('.', ',')} graus"
+        else:
+            corte = str(CONFIG.get("temp_corte_resfriamento", 18.0)).replace('.', ',')
+            histerese = str(CONFIG.get("histerese_resfriamento", 2.0)).replace('.', ',')
+            tipo = "resfriamento"
+            detalhe_gatilho = f"liga em {str(float(corte.replace(',','.')) + float(histerese.replace(',','.'))).replace('.', ',')} graus"
+
+        temp_max = str(CONFIG.get("temp_max_overshoot", 14.0)).replace('.', ',')
         derivada = CONFIG.get("derivada_critica", -15.0)
         derivada_str = str(abs(derivada)).replace('.', ',')
-        
         offset = str(CONFIG.get("offset_piso", 0.5)).replace('.', ',')
         
         fala = (
-            f"Configurações vigentes: Temperatura alvo de {temp_corte} graus, com faixa de variação permitida de {histerese} graus. "
-            f"O limite de segurança máximo é de {temp_max} graus. "
-            f"A proteção anti-compressor está configurada para identificar queda maior que {derivada_str} graus por minuto, "
-            f"subindo o piso temporariamente em {offset} graus para previnir undershoot."
+            f"O sistema está em modo de {tipo}. A temperatura alvo é {corte} graus, com histerese de {histerese} graus. "
+            f"Ou seja, ele {detalhe_gatilho} e desliga ao atingir o alvo. "
+            f"A proteção antecipatória está ativa para variações de {derivada_str} graus por minuto."
         )
         
         return {
