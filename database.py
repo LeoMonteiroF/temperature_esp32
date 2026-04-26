@@ -66,7 +66,10 @@ def carregar_configuracoes(config_dict):
     rows = cursor.fetchall()
     
     for row in rows:
-        config_dict[row[0]] = row[1]
+        chave = row[0]
+        valor = row[1]
+        if chave in config_dict:
+            config_dict[chave] = valor
             
     cursor.close()
     conn.close()
