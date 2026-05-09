@@ -34,9 +34,9 @@ def init_db(default_config):
         )
     ''')
     
-    # Tabela para logs do sistema
+    # Tabela para logs do sistema (V2 com auto-pruning)
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS logs (
+        CREATE TABLE IF NOT EXISTS logs_v2 (
             id SERIAL PRIMARY KEY,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             mensagem TEXT
@@ -83,12 +83,20 @@ def salvar_leitura(tipo: str, valor: float, sensor: str):
     conn.close()
 
 def salvar_log_db(mensagem: str):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('INSERT INTO logs (mensagem) VALUES (%s)', (mensagem,))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('INSERT INTO logs_v2 (mensagem) VALUES (%s)', (mensagem,))
+        # Limpeza automática: mantém apenas os últimos 500 logs
+        cursor.execute('DELETE FROM logs_v2 WHERE id NOT IN (SELECT id FROM logs_v2 ORDER BY id DESC LIMIT 500)')
+        conn.commit()
+        cursor.close()
+    except Exception as e:
+        print(f"Erro ao salvar log: {e}")
+    finally:
+        if conn:
+            conn.close()
 
 def atualizar_config_db(configs_para_atualizar, current_config_dict):
     conn = get_db_connection()
@@ -106,16 +114,23 @@ def atualizar_config_db(configs_para_atualizar, current_config_dict):
     conn.close()
 
 def buscar_logs(limite: int):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT mensagem FROM logs ORDER BY id DESC LIMIT %s', (limite,))
-    rows = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    
-    logs = [row[0] for row in rows]
-    logs.reverse()
-    return logs
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT mensagem FROM logs_v2 ORDER BY id DESC LIMIT %s', (limite,))
+        rows = cursor.fetchall()
+        cursor.close()
+        
+        logs = [row[0] for row in rows] if rows else []
+        logs.reverse()
+        return logs
+    except Exception as e:
+        print(f"Erro ao buscar logs: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
 
 def buscar_dados_grafico(periodo: str, resolucao: int):
     conn = get_db_connection()
